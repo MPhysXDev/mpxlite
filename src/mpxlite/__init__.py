@@ -14,6 +14,19 @@ metasurfaces) plug in by subclassing :class:`SolverLite` and bundling
 their own ``.pro`` resources via the ``resource_files`` attribute.
 """
 
+from mpxlite.base import GetDPError, SolverLite
+from mpxlite.parsers import parse_complex_scalar, parse_complex_table, parse_real_table
+from mpxlite.result import SolverResult
+from mpxlite.workflow import WorkflowData
+
 __version__ = "0.1.0"
 
-__all__: list[str] = []
+__all__ = [
+    "GetDPError",
+    "SolverLite",
+    "SolverResult",
+    "WorkflowData",
+    "parse_complex_scalar",
+    "parse_complex_table",
+    "parse_real_table",
+]

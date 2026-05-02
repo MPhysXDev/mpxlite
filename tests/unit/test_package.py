@@ -22,6 +22,17 @@ def test_package_has_version() -> None:
     assert re.match(r"^\d+\.\d+\.\d+", version), version
 
 
-def test_public_api_export_list_is_empty_for_now() -> None:
-    """A1 scaffold exports nothing yet; later commits populate ``__all__``."""
-    assert mpxlite.__all__ == []
+def test_top_level_exports() -> None:
+    """The public API is exported at the package top level."""
+    expected = {
+        "GetDPError",
+        "SolverLite",
+        "SolverResult",
+        "WorkflowData",
+        "parse_complex_scalar",
+        "parse_complex_table",
+        "parse_real_table",
+    }
+    assert set(mpxlite.__all__) == expected
+    for name in expected:
+        assert hasattr(mpxlite, name), f"{name} not exported"
