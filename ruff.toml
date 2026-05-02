@@ -1,0 +1,43 @@
+# Copyright (c) 2025 Thierry Valet
+# SPDX-License-Identifier: MIT
+
+line-length = 100
+target-version = "py310"
+extend-exclude = [".nox", ".venv"]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+    "N",   # pep8-naming
+    "D",   # pydocstyle
+    "C90", # mccabe complexity
+    "ANN", # flake8-annotations
+]
+ignore = [
+    "D100",   # missing docstring in public module
+    "D104",   # missing docstring in public package
+    "D105",   # missing docstring in magic method (covered by class docstring)
+    "D107",   # missing docstring in __init__ (covered by class docstring)
+    "D203",   # 1 blank line required before class docstring (conflicts with D211)
+    "D213",   # multi-line docstring summary should start at the second line
+    "ANN401", # dynamically typed expressions (Any) — allowed at boundaries
+    "RUF002", # ambiguous Unicode in docstrings (we use intentional math symbols)
+    "RUF003", # ambiguous Unicode in comments
+]
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.per-file-ignores]
+"tests/**" = ["D", "ANN", "N806", "N802", "SIM300"]
+"noxfile.py" = ["D"]
+
+[lint.mccabe]
+max-complexity = 12

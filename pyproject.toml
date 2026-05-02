@@ -1,0 +1,70 @@
+# Copyright (c) 2025 Thierry Valet
+# SPDX-License-Identifier: MIT
+
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mpxlite"
+dynamic = ["version"]
+description = "Lightweight Python encapsulation of the GetDP FE solver, MPI-aware."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Thierry Valet", email = "tvalet@mphysx.com" },
+]
+license = { file = "LICENSE" }
+keywords = ["getdp", "fem", "multiphysics", "mpi", "petsc", "mumps"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "pytest-mock>=3.12",
+]
+dev = [
+    "ruff>=0.4",
+    "nox>=2024.3.2",
+    "build>=1.0",
+    "mpxlite[test]",
+]
+
+[project.urls]
+Homepage = "https://github.com/"
+
+[tool.hatch.version]
+path = "src/mpxlite/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mpxlite"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["mpxlite"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@(abc\\.)?abstractmethod",
+]
