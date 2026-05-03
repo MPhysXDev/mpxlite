@@ -51,3 +51,20 @@ def build(session: nox.Session) -> None:
     """Build sdist and wheel distributions."""
     session.install("build>=1.0")
     session.run("python", "-m", "build")
+
+
+@nox.session
+def docs(session: nox.Session) -> None:
+    """Build the Sphinx HTML documentation (warnings = errors)."""
+    session.install("-e", ".[docs]")
+    session.run(
+        "python",
+        "-m",
+        "sphinx",
+        "-b",
+        "html",
+        "-W",
+        "docs",
+        "docs/_build/html",
+        *session.posargs,
+    )

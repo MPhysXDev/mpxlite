@@ -48,3 +48,7 @@ env/
 *.dat
 metalab.pro
 workflow.pro
+
+# Sphinx documentation
+docs/_build/
+docs/_autoapi/
