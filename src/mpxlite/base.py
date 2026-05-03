@@ -257,20 +257,24 @@ class SolverLite:
 
     @staticmethod
     def _resolve_getdp() -> str:
-        """Locate the ``getdp`` binary.
+        """Locate an executable that drives ``getdp``.
 
         Search order:
+
             1. ``MPXLITE_GETDP`` environment variable (must point to an
-               executable file). Typically the ``tools/getdp_runner.sh``
-               wrapper that handles ``mpirun`` invocation and
-               ``LD_LIBRARY_PATH`` augmentation.
-            2. ``getdp`` on ``PATH`` (via :func:`shutil.which`).
+               executable file). Useful for bypassing the bundled wrapper
+               with a custom launcher.
+            2. The bundled ``tools/getdp_runner.sh`` wrapper that ships
+               with the mpxlite wheel. Auto-detects the MPI launcher
+               (mpirun / srun / mpiexec) from the surrounding scheduler
+               environment and exec-s the actual ``getdp`` binary located
+               via ``MPXLITE_GETDP_BINARY`` or :func:`shutil.which`.
 
         Returns:
-            The absolute path of a callable ``getdp`` binary.
+            The absolute path of a callable ``getdp`` driver.
 
         Raises:
-            FileNotFoundError: if no usable ``getdp`` binary is found.
+            FileNotFoundError: if neither override nor bundled wrapper is usable.
         """
         env = os.environ.get("MPXLITE_GETDP")
         if env:
@@ -278,10 +282,21 @@ class SolverLite:
             if path.is_file() and os.access(path, os.X_OK):
                 return str(path)
             raise FileNotFoundError(f"MPXLITE_GETDP={env!r} is not an executable file.")
+        # Default: bundled wrapper. It handles MPI launching and -- if
+        # MPXLITE_GETDP_NP is unset or 1 -- falls through to a direct
+        # exec of the getdp binary.
+        from mpxlite import WRAPPER_PATH
+        if WRAPPER_PATH.is_file() and os.access(WRAPPER_PATH, os.X_OK):
+            return str(WRAPPER_PATH)
+        # Last resort: bare getdp on PATH (no LD_LIBRARY_PATH augmentation,
+        # no MPI launching). Useful for hermetic test environments where
+        # the wheel was unpacked and the shell bit got lost.
         which = shutil.which("getdp")
         if which:
             return which
         raise FileNotFoundError(
-            "getdp binary not found. Install getdp and put it on PATH, or "
-            "set MPXLITE_GETDP to its absolute path."
+            "Neither the bundled getdp_runner.sh wrapper nor a getdp binary "
+            "could be located. Install getdp and put it on PATH, or set "
+            "MPXLITE_GETDP_BINARY (the actual binary) or MPXLITE_GETDP "
+            "(a custom wrapper) explicitly."
         )
