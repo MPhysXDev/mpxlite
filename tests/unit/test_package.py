@@ -28,7 +28,9 @@ def test_top_level_exports() -> None:
         "GetDPError",
         "SolverLite",
         "SolverResult",
+        "WRAPPER_PATH",
         "WorkflowData",
+        "find_getdp",
         "parse_complex_scalar",
         "parse_complex_table",
         "parse_real_table",
@@ -36,3 +38,10 @@ def test_top_level_exports() -> None:
     assert set(mpxlite.__all__) == expected
     for name in expected:
         assert hasattr(mpxlite, name), f"{name} not exported"
+
+
+def test_wrapper_path_is_bundled_and_executable() -> None:
+    """The bundled launcher is reachable and has the executable bit set."""
+    import os
+    assert mpxlite.WRAPPER_PATH.is_file(), mpxlite.WRAPPER_PATH
+    assert os.access(mpxlite.WRAPPER_PATH, os.X_OK)
