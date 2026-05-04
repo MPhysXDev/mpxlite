@@ -43,5 +43,6 @@ def test_top_level_exports() -> None:
 def test_wrapper_path_is_bundled_and_executable() -> None:
     """The bundled launcher is reachable and has the executable bit set."""
     import os
+
     assert mpxlite.WRAPPER_PATH.is_file(), mpxlite.WRAPPER_PATH
     assert os.access(mpxlite.WRAPPER_PATH, os.X_OK)

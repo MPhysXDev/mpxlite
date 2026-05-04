@@ -286,6 +286,7 @@ class SolverLite:
         # MPXLITE_GETDP_NP is unset or 1 -- falls through to a direct
         # exec of the getdp binary.
         from mpxlite import WRAPPER_PATH
+
         if WRAPPER_PATH.is_file() and os.access(WRAPPER_PATH, os.X_OK):
             return str(WRAPPER_PATH)
         # Last resort: bare getdp on PATH (no LD_LIBRARY_PATH augmentation,

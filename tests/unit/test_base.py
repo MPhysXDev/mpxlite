@@ -322,11 +322,13 @@ def test_resolve_getdp_defaults_to_bundled_wrapper(monkeypatch: pytest.MonkeyPat
     """When MPXLITE_GETDP is not set, the bundled getdp_runner.sh is used."""
     monkeypatch.delenv("MPXLITE_GETDP", raising=False)
     import mpxlite
+
     assert SolverLite._resolve_getdp() == str(mpxlite.WRAPPER_PATH)
 
 
 def test_resolve_getdp_falls_back_to_path_when_wrapper_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """If the wrapper is somehow not on disk, fall back to bare getdp on PATH."""
     monkeypatch.delenv("MPXLITE_GETDP", raising=False)
@@ -344,5 +346,5 @@ def test_resolve_getdp_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv("MPXLITE_GETDP", raising=False)
     monkeypatch.setattr("mpxlite.WRAPPER_PATH", tmp_path / "missing.sh")
     monkeypatch.setattr("mpxlite.base.shutil.which", lambda _name: None)
-    with pytest.raises(FileNotFoundError, match="bundled getdp_runner.sh"):
+    with pytest.raises(FileNotFoundError, match=r"bundled getdp_runner\.sh"):
         SolverLite._resolve_getdp()

@@ -64,9 +64,7 @@ def find_getdp() -> Path:
         path = Path(override).expanduser()
         if path.is_file() and os.access(path, os.X_OK):
             return path.resolve()
-        raise FileNotFoundError(
-            f"MPXLITE_GETDP_BINARY={override!r} is not an executable file."
-        )
+        raise FileNotFoundError(f"MPXLITE_GETDP_BINARY={override!r} is not an executable file.")
     found = shutil.which("getdp")
     if found:
         return Path(found).resolve()
@@ -77,10 +75,10 @@ def find_getdp() -> Path:
 
 
 __all__ = [
+    "WRAPPER_PATH",
     "GetDPError",
     "SolverLite",
     "SolverResult",
-    "WRAPPER_PATH",
     "WorkflowData",
     "find_getdp",
     "parse_complex_scalar",

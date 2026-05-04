@@ -78,3 +78,22 @@ jobs:
           path: junit.xml
           reporter: java-junit
           fail-on-error: false
+
+  docs:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install nox
+        run: pip install --upgrade pip && pip install nox
+      - name: Build documentation
+        run: nox -s docs
+      - name: Upload built docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-html
+          path: docs/_build/html/
