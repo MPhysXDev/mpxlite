@@ -84,34 +84,130 @@ Source build (recommended for non-trivial cases)
 ++++++++++++++++++++++++++++++++++++++++++++++++
 
 For any non-trivial linear system or for distributed solves, build
-``getdp`` from source against a PETSc compiled with MPI and MUMPS.
+``getdp`` from source against a PETSc compiled with MPI + MUMPS. The
+recipe below is exercised on the reference development workstation
+and produces a working stack on a clean Ubuntu 24.04 host.
 
-1. **Build PETSc with MPI + MUMPS**::
+System prerequisites (one ``sudo`` step)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-      git clone -b release https://gitlab.com/petsc/petsc.git $HOME/petsc
-      cd $HOME/petsc
-      ./configure --with-mpi --download-mumps --download-scalapack \
-                  --download-metis --download-parmetis --with-openmp
-      make
+On Debian / Ubuntu, install the build tools, the MPI runtime + dev
+headers, and ``flex`` / ``bison`` (the last two are needed by
+PETSc's bundled PT-Scotch downloader and are a common first-attempt
+failure)::
 
-   Note the printed ``PETSC_DIR`` and ``PETSC_ARCH``; the libraries
-   live under ``$PETSC_DIR/$PETSC_ARCH/lib``.
+    sudo apt install -y \
+        build-essential gfortran cmake git \
+        openmpi-bin libopenmpi-dev \
+        flex bison
 
-2. **Build GetDP against that PETSc**::
+This is the entire system-wide footprint; everything else runs in
+user space.
 
-      git clone https://gitlab.onelab.info/getdp/getdp.git
-      cd getdp && mkdir build && cd build
-      cmake .. -DENABLE_PETSC=ON \
-               -DPETSC_DIR=$HOME/petsc \
-               -DPETSC_ARCH=arch-linux-c-debug
+1. **Build PETSc with MPI + MUMPS**
+
+   ::
+
+      git clone -b release --depth 1 \
+          https://gitlab.com/petsc/petsc.git $HOME/opt/petsc
+      cd $HOME/opt/petsc
+      ./configure \
+          --with-mpi-dir=/usr \
+          --with-fortran-bindings=0 \
+          --with-shared-libraries=1 \
+          --with-debugging=0 \
+          --COPTFLAGS="-O3 -march=native" \
+          --CXXOPTFLAGS="-O3 -march=native" \
+          --FOPTFLAGS="-O3 -march=native" \
+          --download-mumps \
+          --download-scalapack \
+          --download-metis \
+          --download-parmetis \
+          --download-ptscotch
+      make PETSC_DIR=$HOME/opt/petsc PETSC_ARCH=arch-linux-c-opt all
+
+   The configure step downloads and builds MUMPS, ScaLAPACK, METIS,
+   ParMETIS and PT-Scotch in matched versions; on a 16-core
+   workstation the full PETSc build takes ~20--25 min.
+
+   Note the printed ``PETSC_DIR`` and ``PETSC_ARCH`` lines; the
+   shared libraries live under ``$PETSC_DIR/$PETSC_ARCH/lib``. With
+   ``--with-debugging=0`` the resulting ``PETSC_ARCH`` is
+   ``arch-linux-c-opt``.
+
+2. **Build GetDP against that PETSc**
+
+   Use the latest tagged stable release; do **not** build from
+   ``master`` --- the version string in master is the next
+   development cycle ("4.0.0-git-..."), not a release::
+
+      git clone https://gitlab.onelab.info/getdp/getdp.git $HOME/opt/getdp
+      cd $HOME/opt/getdp
+      git checkout getdp_3_5_0
+      mkdir build && cd build
+      PETSC_DIR=$HOME/opt/petsc PETSC_ARCH=arch-linux-c-opt \
+      cmake .. \
+          -DENABLE_PETSC=1 \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX=$HOME/opt/getdp/install \
+          -DCMAKE_C_COMPILER=mpicc \
+          -DCMAKE_CXX_COMPILER=mpicxx \
+          -DCMAKE_Fortran_COMPILER=mpif90
       make -j
+      make install
 
-   The resulting binary is ``build/getdp``.
+   .. important::
 
-3. **Make it discoverable**::
+      Building GetDP must use the ``mpicc`` / ``mpicxx`` / ``mpif90``
+      wrappers, not bare ``gcc`` / ``g++`` / ``gfortran``. Without
+      them the build fails with ``fatal error: mpi.h: No such file
+      or directory`` when including PETSc's ``petscsys.h``. This is
+      the single most common first-attempt failure of the source
+      build.
 
-      export MPXLITE_GETDP_BINARY=$HOME/getdp/build/getdp
-      export MPXLITE_PETSC_LIB_DIR=$HOME/petsc/arch-linux-c-debug/lib
+   The resulting binary is ``$HOME/opt/getdp/install/bin/getdp``.
+
+3. **Make it discoverable**
+
+   ::
+
+      export MPXLITE_GETDP_BINARY=$HOME/opt/getdp/install/bin/getdp
+      export MPXLITE_PETSC_LIB_DIR=$HOME/opt/petsc/arch-linux-c-opt/lib
+
+   For *direct* (non-wrapper) ``getdp`` invocation, also prepend
+   ``MPXLITE_PETSC_LIB_DIR`` to ``LD_LIBRARY_PATH`` so the dynamic
+   loader can resolve ``libpetsc.so``. mpxlite's bundled
+   ``getdp_runner.sh`` wrapper does this automatically, so the line
+   below is only needed when calling ``getdp`` outside the wrapper::
+
+      export LD_LIBRARY_PATH="$MPXLITE_PETSC_LIB_DIR:$LD_LIBRARY_PATH"
+
+4. **Verify the build**
+
+   ``getdp --info`` should list ``PETSc`` among the build options
+   and report the PETSc version it was linked against::
+
+      $ getdp --info | head -10
+      Version          : 3.5.0-git-864875cd
+      License          : GNU General Public License
+      Build OS         : Linux64
+      Build options    : 64Bit Arpack[contrib] Blas Kernel Lapack PETSc PeWe Python
+      PETSc version    : 3.25.1 (real arithmetic)
+      ...
+
+   For a full end-to-end stack smoke test (MPI launcher + PETSc +
+   MUMPS + GetDP + Gmsh), run metalab's ``vacuum_baseline``
+   integration test against a sibling checkout of the metalab
+   repository::
+
+      cd ../metalab
+      pip install -e .[test,examples]
+      export MPXLITE_GETDP_NP=4
+      export OMP_NUM_THREADS=1
+      pytest tests/integration/vacuum_baseline/
+
+   All four asserts should pass; on a 16-core workstation the test
+   completes in ~6 min on 4 MPI ranks.
 
 Environment variables
 ---------------------
@@ -250,3 +346,41 @@ Common causes:
 The wrapper found neither ``SLURM_JOB_ID`` nor ``PBS_NODEFILE`` and
 no ``mpirun`` on ``PATH``. Either install Open MPI / MPICH, run inside
 a SLURM / PBS allocation, or set ``MPXLITE_GETDP_LAUNCHER`` explicitly.
+
+PETSc configure dies with ``PTScotch needs flex installed``
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+The bundled PT-Scotch downloader needs ``flex`` and ``bison`` at
+build time; they are not pulled in by ``build-essential``. On a clean
+Ubuntu host this is the most common first-attempt failure of the
+source build::
+
+    sudo apt install -y flex bison
+
+then re-run PETSc's ``./configure``.
+
+GetDP build dies with ``fatal error: mpi.h: No such file or directory``
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+GetDP's CMake did not pick up the MPI include path that PETSc's
+headers expect. Wipe the build directory and re-run ``cmake`` with
+the MPI compiler wrappers::
+
+    rm -rf build && mkdir build && cd build
+    PETSC_DIR=$HOME/opt/petsc PETSC_ARCH=arch-linux-c-opt \
+    cmake .. \
+        -DENABLE_PETSC=1 \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=mpicc \
+        -DCMAKE_CXX_COMPILER=mpicxx \
+        -DCMAKE_Fortran_COMPILER=mpif90
+
+``libpetsc.so.X.Y: cannot open shared object file``
++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+The dynamic loader cannot find the PETSc shared library at runtime.
+Either invoke ``getdp`` through mpxlite's ``getdp_runner.sh`` wrapper
+(which prepends ``MPXLITE_PETSC_LIB_DIR`` to ``LD_LIBRARY_PATH``
+automatically), or export it manually before running directly::
+
+    export LD_LIBRARY_PATH="$MPXLITE_PETSC_LIB_DIR:$LD_LIBRARY_PATH"
