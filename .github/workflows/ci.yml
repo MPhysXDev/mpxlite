@@ -1,0 +1,110 @@
+# Copyright (c) 2025-2026 MPhysX
+# SPDX-License-Identifier: MIT
+#
+# CI of mpxlite on every push and pull request to main: lint, unit tests
+# (Python 3.12 and 3.14) and the bundle job on Ubuntu 24.04 (engine restored
+# from the cache part by part, the parts whose inputs changed built, bundle
+# made, installed into a clean prefix, smoke test, the tests of the Gmsh
+# toolkit and the integration suite of the installed copy). nightly.yml builds and
+# tests the bundles for Ubuntu 24.04 and 26.04 (same engine cache); release.yml
+# publishes a tagged release.
+#
+# Engine cache: one cache per part of tools/engine/build_engine.sh (petsc,
+# getdp, petsc4py, occt, fltk, gmsh), keyed by what the script prints with
+# --print-key PART (.github/actions/engine-cache-restore and -save): a change
+# of the GetDP patch rebuilds GetDP only, an edit of the script that changes no
+# input of a part keeps the cache of that part.
+#
+# Each step calls a script of tools/ci/ (they also run in a local Docker
+# container, tools/ci/in_docker.sh). No secrets are used.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint (ruff, bash -n)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: ruff check, ruff format --check, bash -n
+        run: tools/ci/lint.sh
+
+  unit:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Unit tests
+        run: tools/ci/unit.sh
+      - name: Upload JUnit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-unit-${{ matrix.python-version }}
+          path: ${{ runner.temp }}/mpxlite-ci/junit-unit-*.xml
+          if-no-files-found: ignore
+
+  bundle:
+    name: Bundle (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    # Missing every part builds the engine (about 30-60 min on a runner); with
+    # every part restored, a few minutes.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      # No setup-python: the bundle is built and installed with the system
+      # Python of Ubuntu 24.04 (3.12), as on a user's machine.
+      - name: Build prerequisites
+        run: tools/ci/apt.sh engine
+      - name: Engine prefix (fixed, neutral path; the PETSc build is bound to it)
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" /opt/mpxlite-engine
+      - name: Restore the engine (per part)
+        id: engine-cache
+        uses: ./.github/actions/engine-cache-restore
+        with:
+          release: ubuntu24.04
+          prefix: /opt/mpxlite-engine
+      - name: Build the parts not restored, regenerate engine-info
+        run: tools/ci/engine.sh /opt/mpxlite-engine
+      - name: Save the parts built
+        uses: ./.github/actions/engine-cache-save
+        with:
+          restored: ${{ toJSON(steps.engine-cache.outputs) }}
+      - name: Build the bundle
+        run: tools/ci/bundle.sh /opt/mpxlite-engine "$RUNNER_TEMP/dist"
+      - name: Install the bundle into a clean prefix (install.sh, smoke test)
+        run: tools/ci/install_bundle.sh "$RUNNER_TEMP"/dist/mpxlite-*.tar.gz "$RUNNER_TEMP/mpxlite-home"
+      - name: Smoke test and integration suite of the installed copy
+        run: tools/ci/bundle_tests.sh quick "$RUNNER_TEMP/mpxlite-home" "$RUNNER_TEMP/reports"
+      - name: Upload JUnit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-bundle
+          path: ${{ runner.temp }}/reports/
+          if-no-files-found: ignore

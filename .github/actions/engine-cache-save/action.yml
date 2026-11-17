@@ -1,0 +1,54 @@
+# Copyright (c) 2026 MPhysX
+# SPDX-License-Identifier: MIT
+#
+# Save the parts of the engine prefix that engine-cache-restore did not
+# restore (built by tools/engine/build_engine.sh in this job), each under its
+# own key. Takes the outputs of engine-cache-restore.
+
+name: Save the engine (per part)
+description: Save the parts of the engine prefix that were built in this job.
+
+inputs:
+  restored:
+    description: The outputs of engine-cache-restore, as JSON (toJSON(steps.<id>.outputs))
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Save petsc
+      if: fromJSON(inputs.restored).petsc-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ fromJSON(inputs.restored).petsc-dirs }}
+        key: ${{ fromJSON(inputs.restored).petsc-key }}
+    - name: Save getdp
+      if: fromJSON(inputs.restored).getdp-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ fromJSON(inputs.restored).getdp-dirs }}
+        key: ${{ fromJSON(inputs.restored).getdp-key }}
+    - name: Save petsc4py
+      if: fromJSON(inputs.restored).petsc4py-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ fromJSON(inputs.restored).petsc4py-dirs }}
+        key: ${{ fromJSON(inputs.restored).petsc4py-key }}
+    - name: Save occt
+      if: fromJSON(inputs.restored).occt-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ fromJSON(inputs.restored).occt-dirs }}
+        key: ${{ fromJSON(inputs.restored).occt-key }}
+    - name: Save fltk
+      if: fromJSON(inputs.restored).fltk-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ fromJSON(inputs.restored).fltk-dirs }}
+        key: ${{ fromJSON(inputs.restored).fltk-key }}
+    - name: Save gmsh
+      if: fromJSON(inputs.restored).gmsh-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ fromJSON(inputs.restored).gmsh-dirs }}
+        key: ${{ fromJSON(inputs.restored).gmsh-key }}

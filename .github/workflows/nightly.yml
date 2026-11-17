@@ -1,0 +1,166 @@
+# Copyright (c) 2026 MPhysX
+# SPDX-License-Identifier: MIT
+#
+# Nightly (and on demand; also called by release.yml) for each Ubuntu release
+# the bundles target:
+#   build-*  the engine in /opt/mpxlite-engine, the bundle, and a bundle of the
+#            same tree under a lower version for the upgrade test (Ubuntu 24.04
+#            on the runner, 26.04 in an ubuntu:26.04 container). The engine is
+#            restored from the cache part by part (petsc, getdp, petsc4py,
+#            occt, fltk, gmsh; keys printed by build_engine.sh --print-key PART), and
+#            only the parts whose inputs changed are rebuilt, or the whole
+#            engine when the workflow is started by hand with "fresh" ticked
+#            (built from scratch, cache ignored). The 24.04 caches are the
+#            ones ci.yml uses;
+#   test     in a fresh ubuntu:<release> container: the bundle installed by a
+#            new non-root user in a clean environment (install.sh, apt step,
+#            smoke test), then the smoke test, the full unit suite and the
+#            full integration suite of the installed copy, and the upgrade
+#            paths (older -> this version in place, same version, no downgrade).
+# Uploaded: the bundles with their .sha256 and the JUnit reports.
+#
+# Each step calls a script of tools/ci/. Paths are relative to the workspace:
+# in container jobs the github.workspace / runner.temp contexts name host
+# paths, not the container's.
+
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      fresh:
+        description: Build the engine from scratch (ignore the cache)
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      fresh:
+        description: Build the engine from scratch (ignore the cache)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-2404:
+    name: Build (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build prerequisites (for the cache keys and the build)
+        run: tools/ci/apt.sh base engine
+      - name: Engine prefix (fixed, neutral path; the PETSc build is bound to it)
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" /opt/mpxlite-engine
+      - name: Restore the engine (per part)
+        id: engine-cache
+        if: ${{ !inputs.fresh }}
+        uses: ./.github/actions/engine-cache-restore
+        with:
+          release: ubuntu24.04
+          prefix: /opt/mpxlite-engine
+      - name: Engine (parts restored or built), bundle, upgrade-test bundle
+        env:
+          CI_WORK: ci-work
+        run: tools/ci/nightly_build.sh dist upgrade
+      - name: Save the parts built
+        if: ${{ !inputs.fresh }}
+        uses: ./.github/actions/engine-cache-save
+        with:
+          restored: ${{ toJSON(steps.engine-cache.outputs) }}
+      - name: Upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-ubuntu24.04
+          path: dist/
+          if-no-files-found: error
+      - name: Upload the upgrade-test bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-ubuntu24.04
+          path: upgrade/
+          if-no-files-found: error
+
+  build-2604:
+    name: Build (Ubuntu 26.04)
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    timeout-minutes: 150
+    steps:
+      # git first, so that the checkout is a git repository (the bundle ships
+      # the tests git tracks); zstd for the engine cache.
+      - name: git, zstd
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends git ca-certificates zstd >/dev/null
+      - uses: actions/checkout@v4
+      - name: Mark the checkout safe for git (the container runs as root)
+        run: git config --global --add safe.directory '*'
+      - name: Build prerequisites (for the cache keys and the build)
+        run: tools/ci/apt.sh base engine
+      - name: Restore the engine (per part)
+        id: engine-cache
+        if: ${{ !inputs.fresh }}
+        uses: ./.github/actions/engine-cache-restore
+        with:
+          release: ubuntu26.04
+          prefix: /opt/mpxlite-engine
+      - name: Engine (parts restored or built), bundle, upgrade-test bundle
+        env:
+          CI_WORK: ci-work
+        run: tools/ci/nightly_build.sh dist upgrade
+      - name: Save the parts built
+        if: ${{ !inputs.fresh }}
+        uses: ./.github/actions/engine-cache-save
+        with:
+          restored: ${{ toJSON(steps.engine-cache.outputs) }}
+      - name: Upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-ubuntu26.04
+          path: dist/
+          if-no-files-found: error
+      - name: Upload the upgrade-test bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-ubuntu26.04
+          path: upgrade/
+          if-no-files-found: error
+
+  test:
+    name: Install and test (Ubuntu ${{ matrix.release }})
+    needs: [build-2404, build-2604]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    container: ubuntu:${{ matrix.release }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ['24.04', '26.04']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-ubuntu${{ matrix.release }}
+          path: dist
+      - name: Download the upgrade-test bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: upgrade-ubuntu${{ matrix.release }}
+          path: upgrade
+      - name: Install as a non-root user, smoke test, full suites, upgrade paths
+        env:
+          CI_WORK: ci-work
+        run: tools/ci/nightly_test.sh dist/mpxlite-*-ubuntu${{ matrix.release }}-x86_64.tar.gz upgrade/mpxlite-*-ubuntu${{ matrix.release }}-x86_64.tar.gz reports
+      - name: Upload JUnit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-ubuntu${{ matrix.release }}
+          path: reports/
+          if-no-files-found: ignore

@@ -1,0 +1,120 @@
+# Copyright (c) 2026 MPhysX
+# SPDX-License-Identifier: MIT
+#
+# Restore the engine prefix from the CI cache, part by part (petsc, getdp,
+# petsc4py, occt, fltk, gmsh: the parts of tools/engine/build_engine.sh). The key of
+# each part is the one the build script prints (--print-key PART: the release
+# of the system, the pinned sources, the options, the recipe number, and the
+# keys of the parts it depends on), so a part is restored exactly when the
+# script would skip it: a change of the GetDP patch misses the getdp cache
+# only; an edit of the script that changes no input of a part keeps its cache.
+# The directories of each part come from --print-dirs PART. Needs the build
+# prerequisites (python3) installed. Use engine-cache-save after the build,
+# with the outputs of this action.
+
+name: Restore the engine (per part)
+description: Restore the parts of the engine prefix from the cache, keyed by build_engine.sh --print-key.
+
+inputs:
+  release:
+    description: Ubuntu release label of the cache keys (ubuntu24.04, ubuntu26.04)
+    required: true
+  prefix:
+    description: The engine prefix (the PETSc build is bound to it)
+    required: true
+
+outputs:
+  petsc-key:
+    value: ${{ steps.keys.outputs.petsc-key }}
+  getdp-key:
+    value: ${{ steps.keys.outputs.getdp-key }}
+  petsc4py-key:
+    value: ${{ steps.keys.outputs.petsc4py-key }}
+  occt-key:
+    value: ${{ steps.keys.outputs.occt-key }}
+  fltk-key:
+    value: ${{ steps.keys.outputs.fltk-key }}
+  gmsh-key:
+    value: ${{ steps.keys.outputs.gmsh-key }}
+  petsc-dirs:
+    value: ${{ steps.keys.outputs.petsc-dirs }}
+  getdp-dirs:
+    value: ${{ steps.keys.outputs.getdp-dirs }}
+  petsc4py-dirs:
+    value: ${{ steps.keys.outputs.petsc4py-dirs }}
+  occt-dirs:
+    value: ${{ steps.keys.outputs.occt-dirs }}
+  fltk-dirs:
+    value: ${{ steps.keys.outputs.fltk-dirs }}
+  gmsh-dirs:
+    value: ${{ steps.keys.outputs.gmsh-dirs }}
+  petsc-hit:
+    value: ${{ steps.petsc.outputs.cache-hit }}
+  getdp-hit:
+    value: ${{ steps.getdp.outputs.cache-hit }}
+  petsc4py-hit:
+    value: ${{ steps.petsc4py.outputs.cache-hit }}
+  occt-hit:
+    value: ${{ steps.occt.outputs.cache-hit }}
+  fltk-hit:
+    value: ${{ steps.fltk.outputs.cache-hit }}
+  gmsh-hit:
+    value: ${{ steps.gmsh.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Keys and directories of the parts (build_engine.sh --print-key / --print-dirs)
+      id: keys
+      shell: bash
+      env:
+        RELEASE: ${{ inputs.release }}
+        PREFIX: ${{ inputs.prefix }}
+      run: |
+        set -euo pipefail
+        for part in petsc getdp petsc4py occt fltk gmsh; do
+          key="engine-$RELEASE-$(tools/engine/build_engine.sh --print-key "$part")"
+          echo "$part-key=$key" >> "$GITHUB_OUTPUT"
+          {
+            echo "$part-dirs<<MPXLITE_DIRS"
+            tools/engine/build_engine.sh --print-dirs "$part" | sed "s|^|$PREFIX/|"
+            echo "MPXLITE_DIRS"
+          } >> "$GITHUB_OUTPUT"
+          echo "$part: $key"
+        done
+    - name: Restore petsc
+      id: petsc
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.keys.outputs.petsc-dirs }}
+        key: ${{ steps.keys.outputs.petsc-key }}
+    - name: Restore getdp
+      id: getdp
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.keys.outputs.getdp-dirs }}
+        key: ${{ steps.keys.outputs.getdp-key }}
+    - name: Restore petsc4py
+      id: petsc4py
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.keys.outputs.petsc4py-dirs }}
+        key: ${{ steps.keys.outputs.petsc4py-key }}
+    - name: Restore occt
+      id: occt
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.keys.outputs.occt-dirs }}
+        key: ${{ steps.keys.outputs.occt-key }}
+    - name: Restore fltk
+      id: fltk
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.keys.outputs.fltk-dirs }}
+        key: ${{ steps.keys.outputs.fltk-key }}
+    - name: Restore gmsh
+      id: gmsh
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.keys.outputs.gmsh-dirs }}
+        key: ${{ steps.keys.outputs.gmsh-key }}

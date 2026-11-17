@@ -1,0 +1,100 @@
+# Copyright (c) 2026 MPhysX
+# SPDX-License-Identifier: MIT
+#
+# Release of mpxlite on the push of a tag v<version>:
+#   check    the tag is v<package version> and CHANGELOG.md has its entry;
+#   nightly  the whole nightly workflow (nightly.yml): engine (from the cache
+#            part by part, only the parts whose inputs changed rebuilt) and
+#            bundle for Ubuntu 24.04 and 26.04, each installed and tested in a
+#            fresh container (non-root install, smoke test, full suites,
+#            upgrade paths);
+#   dist     the wheel and the sdist (tools/ci/dist.sh);
+#   publish  only if everything above passed: the GitHub release of the tag,
+#            with the two bundles, their .sha256 files, the wheel and the sdist,
+#            created with the gh CLI of the runner and GITHUB_TOKEN. This is the
+#            only job with write permission.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Tag = package version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag
+        run: tools/ci/release_check.sh "$GITHUB_REF_NAME"
+
+  nightly:
+    name: Build and test the bundles
+    needs: check
+    uses: ./.github/workflows/nightly.yml
+
+  dist:
+    name: Wheel and sdist
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build and check the Python distributions
+        run: tools/ci/dist.sh python-dist
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: python-dist/
+          if-no-files-found: error
+
+  publish:
+    name: GitHub release
+    needs: [nightly, dist]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download the bundles
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-ubuntu*
+          path: assets
+          merge-multiple: true
+      - name: Download the Python distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: assets
+      - name: Check the assets
+        run: |
+          cd assets
+          ls -la
+          sha256sum -c ./*.tar.gz.sha256 --ignore-missing
+          V="${GITHUB_REF_NAME#v}"
+          for f in "mpxlite-$V-ubuntu24.04-x86_64.tar.gz" "mpxlite-$V-ubuntu26.04-x86_64.tar.gz" \
+                   "mpxlite-$V-ubuntu24.04-x86_64.tar.gz.sha256" "mpxlite-$V-ubuntu26.04-x86_64.tar.gz.sha256" \
+                   "mpxlite-$V-py3-none-any.whl" "mpxlite-$V.tar.gz"; do
+            test -f "$f" || { echo "missing asset $f"; exit 1; }
+          done
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "mpxlite $V" \
+            --notes "mpxlite $V. Install: download the bundle of your Ubuntu release (24.04 or 26.04, x86-64 with AVX2) and its .sha256, then: sha256sum -c <bundle>.sha256; tar xzf <bundle>; cd <bundle directory>; ./install.sh (see README-INSTALL.md in the bundle). Release notes: CHANGELOG.md." \
+            assets/mpxlite-"$V"-ubuntu24.04-x86_64.tar.gz assets/mpxlite-"$V"-ubuntu24.04-x86_64.tar.gz.sha256 \
+            assets/mpxlite-"$V"-ubuntu26.04-x86_64.tar.gz assets/mpxlite-"$V"-ubuntu26.04-x86_64.tar.gz.sha256 \
+            assets/mpxlite-"$V"-py3-none-any.whl assets/mpxlite-"$V".tar.gz

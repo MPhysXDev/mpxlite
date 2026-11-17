@@ -1,0 +1,514 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+Derived from GetDP 3.5.0, Copyright (C) 1997-2022 P. Dular and C. Geuzaine, University of Liège.
+Modifications Copyright (c) 2026 MPhysX.
+This patch is licensed under the GNU General Public License, version 2 or (at your option) any
+later version, and is NOT covered by the MIT License of mpxlite. GetDP licence: LICENSE.txt of
+the GetDP sources (https://gitlab.onelab.info/getdp/getdp); GPL v2 text:
+https://www.gnu.org/licenses/old-licenses/gpl-2.0.html. See also README.md in this directory.
+
+GetDP 3.5.0 (tag getdp_3_5_0, 864875cd) -- patch set "mpx3"
+
+Supersedes "mpx2", which it contains unchanged (and through it "mpx1",
+getdp-3.5.0-mpx1-mpi-nonlocal-prealloc.patch). Four independent changes plus
+the version suffix; changes 3 and 4 are new in mpx3:
+
+1. MPI: per-row preallocation of the locally owned matrix rows (= mpx1).
+   [src/kernel/LinAlg_PETSC.cpp]
+   Unpatched GetDP 3.5.0 creates the distributed (MPIAIJ) matrix with a
+   uniform -petsc_prealloc guess (default 100) per row for both the diagonal
+   and the off-diagonal blocks, ignoring the "non-local equations" (dense rows
+   produced by global quantities / Integral-type couplings such as a Floquet
+   DtN map). Under MPI each dense row then triggers repeated reallocations of
+   the local matrix during assembly. This passes per-row d_nnz/o_nnz to
+   MatCreateAIJ, mirroring the sequential nnz[] vector (non-local rows get
+   full lines, capped by the existing 500 MB -petsc_prealloc_full heuristic
+   and by the block widths). Local sizes come from PetscSplitOwnership, i.e.
+   identical to PETSC_DECIDE: same layout, same results. Sequential runs are
+   not affected.
+
+2. No fixed limit on the number of groups of entities per element.
+   [src/interface/ProData.h, src/kernel/Get_DofOfElement.cpp,
+    src/kernel/Get_ElementSource.cpp]
+   struct Element held NumGroupsOfEntities, NbrEntitiesInGroups,
+   NumEntitiesInGroups[..][NBR_MAX_ENTITIES_IN_ELEMENT], NumSubFunction[3][..]
+   and GlobalBasisFunction[..] as fixed arrays of NBR_MAX_GROUPS_IN_ELEMENT
+   (200; 30 with HAVE_SMALL_STACK) entries, with "Reached limit number of
+   groups of entities" past 198 (the FIXME in ProData.h). Each global
+   (BF_Region / BF_Global) basis function adds one group on every element of
+   its support, so e.g. a Floquet DtN with two global unknowns per order and
+   side failed above ~99 orders. The arrays are now std::vector members
+   (NumEntitiesInGroups: vector of std::array rows), grown geometrically by a
+   single helper (Grow_GroupsOfEntities) before each insertion and never
+   shrunk: after warm-up the per-element hot paths do not allocate, and
+   elements that never use groups (post-processing, cuts) allocate nothing.
+   All index-based accesses are unchanged; the three call sites passing the
+   arrays as int* use .data(). The ElementTrace candidates, previously
+   Malloc'ed (raw memory), are now created with new / delete since struct
+   Element has non-trivial members. NBR_MAX_GROUPS_IN_ELEMENT is removed
+   (no other use). Below the old limit the behaviour is unchanged
+   (validated byte-identical outputs vs mpx1). sizeof(struct Element) drops
+   from 57936 to 4504 bytes (x86-64; much less stack per local Element).
+
+3. Tabulated Gauss rules on quadrangles: wrong ordinates corrected.
+   [src/kernel/Gauss_Quadrangle.h]
+   3 points: yq3 held +-0.840896415255 where the degree-2 rule needs
+   +-1/sqrt(2) = +-0.7071067811865476. 7 points: the last four entries of
+   yq7 held +-sqrt(3/5) = +-0.7745966692414834 where the degree-5 rule
+   needs +-1/sqrt(3) = +-0.5773502691896258. With the values of GetDP 3.5.0
+   both rules integrate exactly only polynomials of degree 1 in v (the
+   integral of v^2 over the reference square comes out as 1.8856 and 1.9259
+   instead of 4/3), without any message. Abscissae and weights are unchanged.
+   The other tabulated rules (lines, triangles, tetrahedra, hexahedra) are
+   unchanged.
+
+4. Integral post-quantities accept the GaussLegendre integration type.
+   [src/kernel/Cal_PostQuantity.cpp]
+   Cal_PostQuantity refused every integration case whose type is not Gauss
+   ("Only numerical integration is available in Integral PostQuantities"),
+   although the code that follows reads the points through the same
+   Quadrature function as the assembly, which accepts both types. The test
+   now accepts GaussLegendre as well.
+
+5. CMakeLists.txt: GETDP_EXTRA_VERSION "-mpx3" (`getdp --version` prints
+   3.5.0-mpx3-git-864875cd when built from the git tag, 3.5.0-mpx3 from the
+   release tarball).
+
+Apply with:  cd getdp && git apply <this file>   (or: patch -p1 < <this file>)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index bb2a3f16..ada8cb37 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -67,7 +67,7 @@ set(CMAKE_C_STANDARD 99)
+ set(GETDP_MAJOR_VERSION 3)
+ set(GETDP_MINOR_VERSION 5)
+ set(GETDP_PATCH_VERSION 0)
+-set(GETDP_EXTRA_VERSION "")
++set(GETDP_EXTRA_VERSION "-mpx3")
+ set(GETDP_EXTRA_VERSION_TEXI "${GETDP_EXTRA_VERSION}")
+ 
+ if(NOT GETDP_RELEASE)
+diff --git a/src/interface/ProData.h b/src/interface/ProData.h
+index 7c9d0a0d..39993036 100644
+--- a/src/interface/ProData.h
++++ b/src/interface/ProData.h
+@@ -9,6 +9,7 @@
+ #include <string>
+ #include <map>
+ #include <vector>
++#include <array>
+ #include "GetDPConfig.h"
+ #include "ListUtils.h"
+ 
+@@ -1733,14 +1734,6 @@ struct CurrentData {
+ #define NBR_MAX_ENTITIES_IN_ELEMENT 60
+ #define NBR_MAX_SUBENTITIES_IN_ELEMENT 5
+ 
+-// FIXME: this should be made dynamic (with std::vector in Element) ; setting a
+-// static too large can easily lead to stack overflows
+-#if defined(HAVE_SMALL_STACK)
+-#define NBR_MAX_GROUPS_IN_ELEMENT 30
+-#else
+-#define NBR_MAX_GROUPS_IN_ELEMENT 200
+-#endif
+-
+ struct IntxList {
+   int Int;
+   List_T *List;
+@@ -1781,15 +1774,19 @@ struct Element {
+   double DetJac;
+   MATRIX3x3 InvJac;
+ 
++  // Groups of entities (one per basis function group, global function, ...).
++  // The arrays are dynamic (no limit on the number of groups); they are only
++  // grown (see Get_DofOfElement.cpp), never shrunk, so that once warmed up the
++  // per-element hot paths do not allocate. Only the first NbrGroupsOfEntities
++  // entries are meaningful.
+   int NumLastElementForGroupsOfEntities;
+   int NbrGroupsOfEntities;
+-  int NumGroupsOfEntities[NBR_MAX_GROUPS_IN_ELEMENT];
+-  int NbrEntitiesInGroups[NBR_MAX_GROUPS_IN_ELEMENT];
+-  int NumEntitiesInGroups[NBR_MAX_GROUPS_IN_ELEMENT]
+-                         [NBR_MAX_ENTITIES_IN_ELEMENT];
+-  int NumSubFunction[3][NBR_MAX_GROUPS_IN_ELEMENT];
++  std::vector<int> NumGroupsOfEntities;
++  std::vector<int> NbrEntitiesInGroups;
++  std::vector<std::array<int, NBR_MAX_ENTITIES_IN_ELEMENT> > NumEntitiesInGroups;
++  std::vector<int> NumSubFunction[3];
+ 
+-  struct GlobalBasisFunction *GlobalBasisFunction[NBR_MAX_GROUPS_IN_ELEMENT];
++  std::vector<struct GlobalBasisFunction *> GlobalBasisFunction;
+ };
+ 
+ /* Element.Type */
+diff --git a/src/kernel/Cal_PostQuantity.cpp b/src/kernel/Cal_PostQuantity.cpp
+index d0eab425..df057262 100644
+--- a/src/kernel/Cal_PostQuantity.cpp
++++ b/src/kernel/Cal_PostQuantity.cpp
+@@ -178,7 +178,8 @@ void Pos_LocalOrIntegralQuantity(struct PostQuantity *PostQuantity_P,
+     IntegrationCase_P =
+       Get_IntegrationCase(Element, IntegrationCase_L, CriterionIndex);
+ 
+-    if(IntegrationCase_P->Type != GAUSS) {
++    if(IntegrationCase_P->Type != GAUSS &&
++       IntegrationCase_P->Type != GAUSSLEGENDRE) {
+       Message::Error("Only numerical integration is available "
+                      "in Integral PostQuantities");
+       return;
+diff --git a/src/kernel/Gauss_Quadrangle.h b/src/kernel/Gauss_Quadrangle.h
+index 1d1c7758..02f9be5b 100644
+--- a/src/kernel/Gauss_Quadrangle.h
++++ b/src/kernel/Gauss_Quadrangle.h
+@@ -12,7 +12,7 @@ static double pq1[1] = {4.};
+ /* 3 integration points */
+ 
+ static double xq3[3] = {0.816496580928, -0.408248290464, -0.408248290464};
+-static double yq3[3] = {0.0, 0.840896415255, -0.840896415255};
++static double yq3[3] = {0.0, 0.7071067811865476, -0.7071067811865476};
+ static double pq3[3] = {1.33333333333, 1.33333333333, 1.33333333333};
+ 
+ /* 4 integration points */
+@@ -35,10 +35,10 @@ static double xq7[7] = {0.,
+ static double yq7[7] = {0.,
+                         0.9660917830792959,
+                         -0.9660917830792959,
+-                        0.7745966692414834,
+-                        -0.7745966692414834,
+-                        0.7745966692414834,
+-                        -0.7745966692414834};
++                        0.5773502691896258,
++                        -0.5773502691896258,
++                        0.5773502691896258,
++                        -0.5773502691896258};
+ static double pq7[7] = {1.1428571428571428,  0.31746031746031744,
+                         0.31746031746031744, 0.5555555555555556,
+                         0.5555555555555556,  0.5555555555555556,
+diff --git a/src/kernel/Get_DofOfElement.cpp b/src/kernel/Get_DofOfElement.cpp
+index 6d1df28b..9f4509b5 100644
+--- a/src/kernel/Get_DofOfElement.cpp
++++ b/src/kernel/Get_DofOfElement.cpp
+@@ -4,6 +4,7 @@
+ // issues on https://gitlab.onelab.info/getdp/getdp/issues.
+ 
+ #include <stdlib.h>
++#include <algorithm>
+ #include "ProData.h"
+ #include "GeoData.h"
+ #include "DofData.h"
+@@ -26,6 +27,25 @@ struct BasisFunction *BasisFunction_P;
+ int Nbr_ElementaryBF, Flag_SubSpace;
+ struct Group *GroupSupport_P, *GroupEntity_P;
+ 
++/* ------------------------------------------------------------------------ */
++/*  G r o w _ G r o u p s O f E n t i t i e s                               */
++/* ------------------------------------------------------------------------ */
++
++// Make room for (at least) n groups of entities in Element. The group arrays
++// are only ever grown (geometrically), so that after warm-up no allocation
++// takes place in the per-element hot paths.
++static void Grow_GroupsOfEntities(struct Element *Element, int n)
++{
++  if(n <= (int)Element->NumGroupsOfEntities.size()) return;
++  std::size_t m = std::max<std::size_t>(
++    std::max<std::size_t>(n, 2 * Element->NumGroupsOfEntities.size()), 16);
++  Element->NumGroupsOfEntities.resize(m);
++  Element->NbrEntitiesInGroups.resize(m);
++  Element->NumEntitiesInGroups.resize(m);
++  for(int k = 0; k < 3; k++) Element->NumSubFunction[k].resize(m);
++  Element->GlobalBasisFunction.resize(m);
++}
++
+ /* ------------------------------------------------------------------------ */
+ /*  G e t _ I n i t D o f O f E l e m e n t                                 */
+ /* ------------------------------------------------------------------------ */
+@@ -148,8 +168,8 @@ void Get_DofOfElement(struct Element *Element,
+           Element->GeoElement->NumNodes, BasisFunction_P);
+         Get_CodesOfElement(
+           FunctionSpace_P, QuantityStorage_P, Element->NbrGroupsOfEntities,
+-          Element->NumGroupsOfEntities, StartingIndex, i_BFunction,
+-          GROUPSOFNODESOF, Element->NumSubFunction[1]);
++          Element->NumGroupsOfEntities.data(), StartingIndex, i_BFunction,
++          GROUPSOFNODESOF, Element->NumSubFunction[1].data());
+         break;
+ 
+       case GROUPSOFEDGESONNODESOF:
+@@ -158,7 +178,7 @@ void Get_DofOfElement(struct Element *Element,
+         Get_GroupsOfEdgesOnNodesOfElement(Element, &StartingIndex);
+         Get_CodesOfElement(FunctionSpace_P, QuantityStorage_P,
+                            Element->NbrGroupsOfEntities,
+-                           Element->NumGroupsOfEntities, StartingIndex,
++                           Element->NumGroupsOfEntities.data(), StartingIndex,
+                            i_BFunction, GROUPSOFEDGESONNODESOF, NULL);
+         break;
+ 
+@@ -170,7 +190,7 @@ void Get_DofOfElement(struct Element *Element,
+           Element->GeoElement->NumEdges, BasisFunction_P);
+         Get_CodesOfElement(FunctionSpace_P, QuantityStorage_P,
+                            Element->NbrGroupsOfEntities,
+-                           Element->NumGroupsOfEntities, StartingIndex,
++                           Element->NumGroupsOfEntities.data(), StartingIndex,
+                            i_BFunction, GROUPSOFEDGESOF, NULL);
+         break;
+ 
+@@ -182,7 +202,7 @@ void Get_DofOfElement(struct Element *Element,
+           Element->GeoElement->NumFacets, BasisFunction_P);
+         Get_CodesOfElement(FunctionSpace_P, QuantityStorage_P,
+                            Element->NbrGroupsOfEntities,
+-                           Element->NumGroupsOfEntities, StartingIndex,
++                           Element->NumGroupsOfEntities.data(), StartingIndex,
+                            i_BFunction, GROUPSOFFACETSOF, NULL);
+         break;
+ 
+@@ -190,23 +210,23 @@ void Get_DofOfElement(struct Element *Element,
+         Get_RegionForElement(Element, &StartingIndex, BasisFunction_P);
+         Get_CodesOfElement(FunctionSpace_P, QuantityStorage_P,
+                            Element->NbrGroupsOfEntities,
+-                           Element->NumGroupsOfEntities, StartingIndex,
+-                           i_BFunction, REGION, Element->NumSubFunction[1]);
++                           Element->NumGroupsOfEntities.data(), StartingIndex,
++                           i_BFunction, REGION, Element->NumSubFunction[1].data());
+         break;
+ 
+       case GROUPOFREGIONSOF:
+         Get_GroupOfRegionsForElement(Element, &StartingIndex, BasisFunction_P);
+         Get_CodesOfElement(
+           FunctionSpace_P, QuantityStorage_P, Element->NbrGroupsOfEntities,
+-          Element->NumGroupsOfEntities, StartingIndex, i_BFunction,
+-          GROUPOFREGIONSOF, Element->NumSubFunction[1]);
++          Element->NumGroupsOfEntities.data(), StartingIndex, i_BFunction,
++          GROUPOFREGIONSOF, Element->NumSubFunction[1].data());
+         break;
+ 
+       case GLOBAL:
+         Get_GlobalForElement(Element, &StartingIndex, BasisFunction_P);
+         Get_CodesOfElement(FunctionSpace_P, QuantityStorage_P,
+                            Element->NbrGroupsOfEntities,
+-                           Element->NumGroupsOfEntities, StartingIndex,
++                           Element->NumGroupsOfEntities.data(), StartingIndex,
+                            i_BFunction, GLOBAL, NULL);
+         break;
+       }
+@@ -257,14 +277,11 @@ void Get_GroupsOfElementaryEntitiesOfElement(
+ 
+       if(!BasisFunction_P->SubFunction) {
+         if(j == Element->NbrGroupsOfEntities) {
++          Grow_GroupsOfEntities(Element, j + 1);
+           Element->NumSubFunction[1][j] = 0;
+           Element->NumSubFunction[0][j] = -1;
+           Element->NumGroupsOfEntities[j] = Key_P->Int2;
+           Element->NbrEntitiesInGroups[Element->NbrGroupsOfEntities++] = 0;
+-          if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
+-            Message::Error("Reached limit number of groups of entities");
+-            return;
+-          }
+         }
+         Element->NumEntitiesInGroups[j][Element->NbrEntitiesInGroups[j]++] =
+           (Key_P->Int1 > 0) ? (i + 1) : -(i + 1);
+@@ -273,6 +290,7 @@ void Get_GroupsOfElementaryEntitiesOfElement(
+         Nbr_SubFunction = List_Nbr(BasisFunction_P->SubFunction);
+ 
+         if(j == Element->NbrGroupsOfEntities) {
++          Grow_GroupsOfEntities(Element, j + Nbr_SubFunction);
+           for(i_SF = 0; i_SF < Nbr_SubFunction; i_SF++) {
+             Element->NumSubFunction[1][j + i_SF] = i_SF;
+             Element->NumSubFunction[0][j + i_SF] =
+@@ -282,10 +300,6 @@ void Get_GroupsOfElementaryEntitiesOfElement(
+                 *((int *)List_Pointer(BasisFunction_P->SubdFunction, i_SF));
+             Element->NumGroupsOfEntities[j + i_SF] = Key_P->Int2;
+             Element->NbrEntitiesInGroups[Element->NbrGroupsOfEntities++] = 0;
+-            if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
+-              Message::Error("Reached limit number of groups of entities");
+-              return;
+-            }
+           }
+         }
+         for(i_SF = 0; i_SF < Nbr_SubFunction; i_SF++)
+@@ -329,11 +343,8 @@ void Get_GroupsOfEdgesOnNodesOfElement(struct Element *Element,
+             (Element->NumGroupsOfEntities[j] != Num_Node))
+         j++;
+       if(j == Element->NbrGroupsOfEntities) {
++        Grow_GroupsOfEntities(Element, j + 1);
+         Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] = Num_Node;
+-        if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
+-          Message::Error("Reached limit number of groups of entities");
+-          return;
+-        }
+         Element->NbrEntitiesInGroups[j] = 0;
+       }
+       Element->NumEntitiesInGroups[j][Element->NbrEntitiesInGroups[j]++] =
+@@ -349,11 +360,8 @@ void Get_GroupsOfEdgesOnNodesOfElement(struct Element *Element,
+             (Element->NumGroupsOfEntities[j] != Num_Node))
+         j++;
+       if(j == Element->NbrGroupsOfEntities) {
++        Grow_GroupsOfEntities(Element, j + 1);
+         Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] = Num_Node;
+-        if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
+-          Message::Error("Reached limit number of groups of entities");
+-          return;
+-        }
+         Element->NbrEntitiesInGroups[j] = 0;
+       }
+       Element->NumEntitiesInGroups[j][Element->NbrEntitiesInGroups[j]++] =
+@@ -379,17 +387,16 @@ void Get_RegionForElement(struct Element *Element, int *StartingIndex,
+   *StartingIndex = Element->NbrGroupsOfEntities;
+ 
+   if(!BasisFunction_P->SubFunction) {
++    Grow_GroupsOfEntities(Element, Element->NbrGroupsOfEntities + 1);
+     Element->NumSubFunction[1][Element->NbrGroupsOfEntities] = 0;
+     Element->NumSubFunction[0][Element->NbrGroupsOfEntities] = -1;
+     Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
+       Element->Region;
+-    if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
+-      Message::Error("Reached limit number of groups of entities");
+-      return;
+-    }
+   }
+   else { /* For SubFunctions (basis functions for a global function) */
+     Nbr_SubFunction = List_Nbr(BasisFunction_P->SubFunction);
++    Grow_GroupsOfEntities(Element,
++                          Element->NbrGroupsOfEntities + Nbr_SubFunction);
+ 
+     for(i_SF = 0; i_SF < Nbr_SubFunction; i_SF++) {
+       Element->NumSubFunction[1][Element->NbrGroupsOfEntities] =
+@@ -403,10 +410,6 @@ void Get_RegionForElement(struct Element *Element, int *StartingIndex,
+                                 i_SF)); /* Index Expression */
+       Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
+         Element->Region;
+-      if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
+-        Message::Error("Reached limit number of groups of entities");
+-        return;
+-      }
+     }
+   }
+ }
+@@ -428,17 +431,16 @@ void Get_GroupOfRegionsForElement(struct Element *Element, int *StartingIndex,
+   *StartingIndex = Element->NbrGroupsOfEntities;
+ 
+   if(!BasisFunction_P->SubFunction) {
++    Grow_GroupsOfEntities(Element, Element->NbrGroupsOfEntities + 1);
+     Element->NumSubFunction[1][Element->NbrGroupsOfEntities] = 0;
+     Element->NumSubFunction[0][Element->NbrGroupsOfEntities] = -1;
+     Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
+       GroupEntity_P->Num;
+-    if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
+-      Message::Error("Reached limit number of groups of entities");
+-      return;
+-    }
+   }
+   else { /* For SubFunctions (basis functions for a global function) */
+     Nbr_SubFunction = List_Nbr(BasisFunction_P->SubFunction);
++    Grow_GroupsOfEntities(Element,
++                          Element->NbrGroupsOfEntities + Nbr_SubFunction);
+ 
+     for(i_SF = 0; i_SF < Nbr_SubFunction; i_SF++) {
+       Element->NumSubFunction[1][Element->NbrGroupsOfEntities] =
+@@ -452,10 +454,6 @@ void Get_GroupOfRegionsForElement(struct Element *Element, int *StartingIndex,
+                                 i_SF)); /* Index Expression */
+       Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
+         GroupEntity_P->Num;
+-      if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
+-        Message::Error("Reached limit number of groups of entities");
+-        return;
+-      }
+     }
+   }
+ }
+@@ -479,6 +477,7 @@ void Get_GlobalForElement(struct Element *Element, int *StartingIndex,
+   Nbr_Global = List_Nbr(GroupEntity_P->InitialList);
+   Num_Global =
+     (Nbr_Global) ? (int *)List_Pointer(GroupEntity_P->InitialList, 0) : NULL;
++  Grow_GroupsOfEntities(Element, Element->NbrGroupsOfEntities + Nbr_Global);
+ 
+   if(BasisFunction_P->GlobalBasisFunction) {
+     for(i = 0; i < Nbr_Global; i++) {
+@@ -488,10 +487,6 @@ void Get_GlobalForElement(struct Element *Element, int *StartingIndex,
+       /* Attention: correspondance i-i si liste triee ! fait dans yacc */
+       Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
+         Num_Global[i];
+-      if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
+-        Message::Error("Reached limit number of groups of entities");
+-        return;
+-      }
+     }
+ 
+     if(TreatmentStatus == STATUS_PRE)
+@@ -502,10 +497,6 @@ void Get_GlobalForElement(struct Element *Element, int *StartingIndex,
+     for(i = 0; i < Nbr_Global; i++) {
+       Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
+         Num_Global[i];
+-      if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
+-        Message::Error("Reached limit number of groups of entities");
+-        return;
+-      }
+     }
+   }
+ }
+diff --git a/src/kernel/Get_ElementSource.cpp b/src/kernel/Get_ElementSource.cpp
+index d3b7446a..42bb6a9e 100644
+--- a/src/kernel/Get_ElementSource.cpp
++++ b/src/kernel/Get_ElementSource.cpp
+@@ -70,7 +70,7 @@ int Get_InitElementTrace(struct Element *Element, int InIndex)
+   struct TwoInt *Pair_P;
+ 
+   for(std::size_t i = 0; i < Element->ElementTraceCandidates.size(); i++) {
+-    Free(Element->ElementTraceCandidates[i]);
++    delete Element->ElementTraceCandidates[i];
+   }
+   Element->ElementTraceCandidates.clear();
+   Element->ElementTrace = nullptr;
+@@ -84,7 +84,7 @@ int Get_InitElementTrace(struct Element *Element, int InIndex)
+                                               &Element->Num, fcmp_int))) {
+       Element->ElementTraceCandidates.resize(1);
+       Element->ElementTraceCandidates[0] =
+-        (struct Element *)Malloc(sizeof(struct Element));
++        new struct Element; // has std::vector members: no Malloc
+       Element->ElementTraceCandidates[0]->GeoElement =
+         Geo_GetGeoElement(Pair_P->Int2);
+     }
+@@ -113,7 +113,7 @@ int Get_InitElementTrace(struct Element *Element, int InIndex)
+       Element->ElementTraceCandidates.resize(matches.size());
+       for(int i = 0; i < matches.size(); i++) {
+         Element->ElementTraceCandidates[i] =
+-          (struct Element *)Malloc(sizeof(struct Element));
++          new struct Element; // has std::vector members: no Malloc
+         Element->ElementTraceCandidates[i]->GeoElement = matches[i];
+       }
+     }
+diff --git a/src/kernel/LinAlg_PETSC.cpp b/src/kernel/LinAlg_PETSC.cpp
+index d2b305c9..a0ec0136 100644
+--- a/src/kernel/LinAlg_PETSC.cpp
++++ b/src/kernel/LinAlg_PETSC.cpp
+@@ -226,10 +226,30 @@ void LinAlg_CreateMatrix(gMatrix *M, gSolver *Solver, int n, int m)
+   for(int i = 0; i < nonloc; i++)
+     nnz[Current.DofData->NonLocalEquations[i] - 1] = prealloc_full;
+ 
+-  if(Message::GetCommSize() > 1) { // FIXME: alloc full lines...
++  if(Message::GetCommSize() > 1) {
+ #if((PETSC_VERSION_MAJOR == 3) && (PETSC_VERSION_MINOR >= 3))
+-    _try(MatCreateAIJ(MyComm, PETSC_DECIDE, PETSC_DECIDE, n, m, prealloc,
+-                      PETSC_NULL, prealloc, PETSC_NULL, &M->M));
++    // Per-row preallocation of the locally owned rows, split between the
++    // diagonal (local columns) and off-diagonal (remote columns) blocks.
++    // Non-local equations get full lines, as in the sequential case:
++    // otherwise each such dense row triggers repeated reallocations of the
++    // whole local matrix during assembly. The local sizes reproduce what
++    // PETSC_DECIDE gives, so the matrix layout is unchanged.
++    PetscInt nrow = PETSC_DECIDE, ncol = PETSC_DECIDE, N = n, Mc = m;
++    _try(PetscSplitOwnership(MyComm, &nrow, &N));
++    _try(PetscSplitOwnership(MyComm, &ncol, &Mc));
++    PetscInt rend = 0;
++    MPI_Scan(&nrow, &rend, 1, MPIU_INT, MPI_SUM, MyComm);
++    PetscInt rstart = rend - nrow;
++    PetscInt dmax = ncol, omax = m - ncol;
++    std::vector<PetscInt> d_nnz(nrow), o_nnz(nrow);
++    for(PetscInt i = 0; i < nrow; i++) {
++      PetscInt nz = nnz[rstart + i];
++      d_nnz[i] = (nz < dmax) ? nz : dmax;
++      o_nnz[i] = (nz < omax) ? nz : omax;
++    }
++    _try(MatCreateAIJ(MyComm, PETSC_DECIDE, PETSC_DECIDE, n, m, 0,
++                      nrow ? &d_nnz[0] : PETSC_NULL, 0,
++                      nrow ? &o_nnz[0] : PETSC_NULL, &M->M));
+ #else
+     _try(MatCreateMPIAIJ(MyComm, PETSC_DECIDE, PETSC_DECIDE, n, m, prealloc,
+                          PETSC_NULL, prealloc, PETSC_NULL, &M->M));
