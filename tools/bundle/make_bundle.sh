@@ -329,7 +329,7 @@ assert gmsh.option.getString("General.Version") == sys.argv[2]
 gmsh.model.occ.addBox(0, 0, 0, 1, 1, 1)
 gmsh.model.occ.synchronize()
 gmsh.model.mesh.generate(3)
-assert gmsh.model.mesh.getNodes()[0].size > 0
+assert len(gmsh.model.mesh.getNodes()[0]) > 0
 gmsh.finalize()
 loaded = sorted({line.split()[-1] for line in open("/proc/self/maps") if "/libgmsh" in line or "/libTK" in line})
 lib = os.path.join(engine, "lib")
