@@ -61,7 +61,7 @@ beside its Gmsh.
   `import gmsh`, batch `gmsh` runs, the jobs and getdp work. The installer's run-time packages
   gain `libx11-6 libxext6 libxft2 libxrender1 libfontconfig1 libgl1 libglu1-mesa libjpeg-turbo8
   libpng16-16t64 zlib1g` and `libgomp1`; the build prerequisites gain `libfreetype-dev
-  libx11-dev libxext-dev libxft-dev libxrender-dev libfontconfig-dev libgl-dev
+  libx11-dev libxext-dev libxft-dev libxrender-dev libfontconfig-dev libgl-dev libegl-dev
   libglu1-mesa-dev libjpeg-dev libpng-dev zlib1g-dev`. `mpxlite-smoke` checks that `import gmsh`
   imports the Gmsh of the engine, which meshes a unit cube, that the `gmsh` on `PATH` is the
   engine's (`gmsh --version`, `gmsh -info` with `Fltk`, without a display), and runs the jobs

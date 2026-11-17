@@ -12,7 +12,7 @@ set -euo pipefail
 
 declare -A GROUP_PKGS=(
     [base]="git ca-certificates sudo python3 python3-venv"
-    [engine]="build-essential gfortran cmake git python3 python3-dev ca-certificates openmpi-bin libopenmpi-dev libopenblas-dev libfreetype-dev libx11-dev libxext-dev libxft-dev libxrender-dev libfontconfig-dev libgl-dev libglu1-mesa-dev libjpeg-dev libpng-dev zlib1g-dev binutils python3-venv"
+    [engine]="build-essential gfortran cmake git python3 python3-dev ca-certificates openmpi-bin libopenmpi-dev libopenblas-dev libfreetype-dev libx11-dev libxext-dev libxft-dev libxrender-dev libfontconfig-dev libgl-dev libegl-dev libglu1-mesa-dev libjpeg-dev libpng-dev zlib1g-dev binutils python3-venv"
 )
 [ $# -gt 0 ] || { sed -n '5,10p' "$0"; exit 2; }
 pkgs=()

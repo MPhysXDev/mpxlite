@@ -45,8 +45,8 @@
 #   sudo apt-get install -y --no-install-recommends build-essential gfortran \
 #       cmake git python3 python3-dev python3-venv ca-certificates openmpi-bin \
 #       libopenmpi-dev libopenblas-dev libfreetype-dev libx11-dev libxext-dev \
-#       libxft-dev libxrender-dev libfontconfig-dev libgl-dev libglu1-mesa-dev \
-#       libjpeg-dev libpng-dev zlib1g-dev
+#       libxft-dev libxrender-dev libfontconfig-dev libgl-dev libegl-dev \
+#       libglu1-mesa-dev libjpeg-dev libpng-dev zlib1g-dev
 #
 # (libfreetype-dev: the headers the Gmsh configuration requires to enable the
 # reading of STEP/IGES names and colours, and the FreeType of Xft for FLTK;
